@@ -361,13 +361,20 @@ gives you a prod-only install.
 ### Run the tests
 
 ```bash
-uv run pytest                     # all tests
+uv run pytest                     # all unit tests (fast, no database)
 uv run pytest -v                  # verbose, lists each test
 uv run pytest tests/test_storage.py        # one file
 uv run pytest -k validation       # filter by name substring
 uv run pytest -x                  # stop at first failure
 uv run pytest --lf                # rerun only last-failed tests
+
+uv run poe test                   # same as `pytest` — unit only
+uv run poe test:int               # integration tests against a real Postgres (see below)
 ```
+
+`uv run pytest` (and `poe test` / `poe check`) run **unit tests only** — the
+integration suite is deselected by default so the everyday loop stays fast and
+needs no database. See [Integration testing against real Postgres](#integration-testing-against-real-postgres) below.
 
 ### Three layers of tests, three files
 
@@ -376,8 +383,10 @@ The testing pyramid maps directly:
 | Layer            | File                              | Tool used         |
 | ---------------- | --------------------------------- | ----------------- |
 | Unit             | `tests/test_storage.py`           | plain `assert`    |
-| API integration  | `tests/test_items_api.py`         | `TestClient`      |
+| API integration  | `tests/test_items_api.py`, `tests/test_demo_api.py` | `TestClient`      |
+| API + DB (SQLite) | `tests/test_orders_api.py`        | `TestClient` + in-memory SQLite |
 | Streaming        | `tests/test_streaming_api.py`     | `TestClient.stream` |
+| DB integration   | `tests/test_orders_integration.py` | `TestClient` + real Postgres (opt-in) |
 
 `TestClient` is the heart of Python web testing — it runs your ASGI app
 **in-process** (no server, no socket) and exposes a requests-like API.
@@ -386,13 +395,24 @@ Same role `supertest` plays in Node, just simpler to set up.
 ### `conftest.py` — pytest's magic file
 
 `tests/conftest.py` defines **fixtures**: setup functions any test can
-opt into by name. Look at it — it's tiny. The two fixtures are:
+opt into by name. Look at it — the fixtures come in two families:
+
+*In-memory / SQLite (the fast default):*
 
 - `store` — a fresh `ItemStore` per test.
 - `client` — a `TestClient` with `app.dependency_overrides` patched to
   use that per-test store. This is the Pythonic answer to "how do I
   swap a real database for a fake one in tests?" — FastAPI's DI system
   has a built-in seam for exactly that.
+- `session` / `orders_client` — the same seam one layer down: an
+  in-memory SQLite database per test, with `get_session` overridden so the
+  Postgres-backed `/orders` handlers run without any database server.
+
+*Real Postgres (opt-in, for integration tests):*
+
+- `pg_engine` / `pg_session` / `integration_client` — point `get_session`
+  at the throwaway `postgres-test` container instead. Covered in
+  [Integration testing against real Postgres](#integration-testing-against-real-postgres).
 
 A test just declares the fixture as a parameter and pytest wires it up:
 
@@ -403,6 +423,49 @@ def test_create_and_get(client):     # `client` is the fixture
 ```
 
 No imports, no boilerplate, automatic per-test isolation.
+
+### Integration testing against real Postgres
+
+The `/orders` unit tests run against **in-memory SQLite** — fast, zero setup,
+and they exercise the handlers, queries, and validation for real. But SQLite
+isn't Postgres: it silently fakes things like `TIMESTAMPTZ`, and it won't catch
+Postgres-specific SQL or constraint behavior. So there's a second, opt-in suite
+that runs the same slice against a **real Postgres** in a throwaway container.
+
+```bash
+uv run poe test:int
+```
+
+That one command:
+
+1. Starts a dedicated `postgres-test` container (Compose `test` profile,
+   port **5433** so it never collides with your dev DB on 5432, `tmpfs`
+   storage so it's in-memory and wiped on stop) and waits for it to be healthy.
+2. Runs only the tests marked `@pytest.mark.integration`.
+3. Tears the container down afterward — even if a test fails.
+
+The integration tests live in `tests/test_orders_integration.py` and are
+**deselected from the default `pytest` run** (via `addopts = -m "not
+integration"` in `pyproject.toml`), so `poe test` and `poe check` stay fast and
+need no Docker.
+
+**How the isolation works.** The `pg_session` fixture opens a transaction per
+test and **rolls it back** at teardown, so the shared database returns to empty
+between tests with no truncation or table re-creation. It uses SQLAlchemy's
+`join_transaction_mode="create_savepoint"`, which lets the handlers call
+`session.commit()` for real (committing into a SAVEPOINT) while the outer
+transaction still unwinds everything on rollback. Fast *and* exercises real
+commit/refresh paths.
+
+**Pointing at a different database.** The fixture reads `TEST_DATABASE_URL` and
+falls back to the local `postgres-test` URL. In CI, set that env var to your
+service-container's URL and `uv run pytest -m integration` runs the same suite
+unchanged. If the database isn't reachable, the integration tests **skip** with
+a pointer to `poe test:int` rather than erroring.
+
+The pattern generalizes: as more of the app becomes database-backed, new
+integration tests reuse these same fixtures — SQLite for the fast inner loop,
+real Postgres for the prod-like gate.
 
 ### Where does Playwright fit?
 

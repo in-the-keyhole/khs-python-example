@@ -24,6 +24,28 @@ services:
       timeout: 5s
       retries: 5
 
+  # Throwaway Postgres for integration tests. Lives behind the `test` profile
+  # so a plain `docker compose up` never starts it; the `poe test:int` task
+  # brings it up and tears it down. Separate port (5433) so it never collides
+  # with the dev `postgres` above, and tmpfs storage so data is in-memory,
+  # fast, and wiped when the container stops — no leftover state between runs.
+  postgres-test:
+    image: postgres:16-alpine
+    profiles: ["test"]
+    environment:
+      POSTGRES_DB: orders
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+    ports:
+      - "5433:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d orders"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
   api:
     build: .
     ports:

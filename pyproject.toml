@@ -52,14 +52,40 @@ dev = [
 [tool.poe.tasks]
 dev      = { cmd = "uvicorn app.main:app --reload",       help = "Run the FastAPI dev server with hot reload" }
 start    = { cmd = "uvicorn app.main:app",                help = "Run the FastAPI server without reload (prod-ish)" }
-test     = { cmd = "pytest",                              help = "Run the full pytest suite" }
+test     = { cmd = "pytest",                              help = "Run the full pytest suite (unit only; integration deselected)" }
 "test:v" = { cmd = "pytest -v",                           help = "Verbose tests" }
 "test:k" = { cmd = "pytest -k",                           help = "Run tests matching a name substring (pass it: poe test:k validation)" }
 lint     = { cmd = "ruff check .",                        help = "Lint with ruff (like ESLint)" }
 "lint:fix" = { cmd = "ruff check --fix .",                help = "Lint + auto-fix" }
 format   = { cmd = "ruff format .",                       help = "Format with ruff (like Prettier)" }
 "format:check" = { cmd = "ruff format --check .",         help = "Verify formatting without changing files" }
-check    = { sequence = ["lint", "format:check", "test"], help = "Everything CI should run" }
+check    = { sequence = ["lint", "format:check", "test"], help = "Everything CI should run (unit tests only)" }
+
+# Integration tests against a real, prod-like Postgres. Spins up the throwaway
+# `postgres-test` container (compose `test` profile), waits for it to be
+# healthy, runs only the `integration`-marked tests, then tears the container
+# (and its tmpfs data) down — even if the tests fail.
+[tool.poe.tasks."test:int"]
+help = "Run integration tests against a throwaway Postgres container"
+shell = """
+docker compose --profile test up -d --wait postgres-test
+pytest -m integration
+status=$?
+docker compose --profile test rm -fsv postgres-test
+exit $status
+"""
+
+# ──────────────────────────────────────────────────────────────────────────────
+# pytest config. The `integration` marker is registered (no "unknown mark"
+# warnings) and deselected by default via addopts, so `poe test` / `poe check`
+# stay fast and need no database. Run the integration suite with `poe test:int`,
+# which passes `-m integration` (overriding the default `-m "not integration"`).
+# ──────────────────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+addopts = "-m 'not integration'"
+markers = [
+    "integration: requires a real Postgres; run via `uv run poe test:int`",
+]
 
 # Ruff config — fine defaults out of the box, just pin the target.
 [tool.ruff]

@@ -1,0 +1,9 @@
+# Copy to terraform.tfvars (which is gitignored) and fill in real values.
+
+project_id = "my-gcp-project-id"
+region     = "us-central1"
+env        = "dev"
+
+# Optional overrides:
+# gke_namespace            = "airflow"
+# gke_service_account_name = "airflow-worker"

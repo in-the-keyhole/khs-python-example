@@ -1,0 +1,86 @@
+[project]
+name = "khs-python-example"
+version = "0.1.0"
+description = "A tiny FastAPI server for learning Python web dev from a Node.js background."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.9",
+    "sqlmodel>=0.0.38",
+    "psycopg[binary]>=3.3.4",
+]
+
+# Cross-platform lockfile. uv will pick versions that have wheels for every
+# listed environment, so `uv sync` works on all of Bob's machines.
+#
+# Tradeoff: stricter resolution sometimes forces older versions of heavy deps
+# (e.g. Ray) that have wheels for all targets. Acceptable for our use.
+#
+# Windows note: native Python on Windows is listed here, but Apache Airflow
+# itself doesn't officially support Windows — the Airflow dev deps below are
+# marked with `; sys_platform != 'win32'` so Windows installs skip them.
+# WSL2 reports as Linux, so it's already covered by the linux entry.
+[tool.uv]
+required-environments = [
+    "sys_platform == 'darwin' and platform_machine == 'x86_64'",   # Intel Mac
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",    # Apple Silicon
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",    # Linux / WSL2
+    "sys_platform == 'win32' and platform_machine == 'AMD64'",     # Windows native
+]
+
+[dependency-groups]
+dev = [
+    "apache-airflow>=3.2.2 ; sys_platform != 'win32'",
+    "apache-airflow-providers-google>=22.0.0 ; sys_platform != 'win32'",
+    "apache-airflow-providers-postgres>=6.7.0",
+    "httpx>=0.28.1",
+    "poethepoet>=0.46.0",
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.15.15",
+]
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Task runner — the Python answer to `package.json` "scripts".
+# Run any of these with:  uv run poe <task>
+#   e.g.  uv run poe dev
+#         uv run poe test
+#         uv run poe check       # lint + format check, no fixes (good for CI)
+# ──────────────────────────────────────────────────────────────────────────────
+[tool.poe.tasks]
+dev      = { cmd = "uvicorn app.main:app --reload",       help = "Run the FastAPI dev server with hot reload" }
+start    = { cmd = "uvicorn app.main:app",                help = "Run the FastAPI server without reload (prod-ish)" }
+test     = { cmd = "pytest",                              help = "Run the full pytest suite" }
+"test:v" = { cmd = "pytest -v",                           help = "Verbose tests" }
+"test:k" = { cmd = "pytest -k",                           help = "Run tests matching a name substring (pass it: poe test:k validation)" }
+lint     = { cmd = "ruff check .",                        help = "Lint with ruff (like ESLint)" }
+"lint:fix" = { cmd = "ruff check --fix .",                help = "Lint + auto-fix" }
+format   = { cmd = "ruff format .",                       help = "Format with ruff (like Prettier)" }
+"format:check" = { cmd = "ruff format --check .",         help = "Verify formatting without changing files" }
+check    = { sequence = ["lint", "format:check", "test"], help = "Everything CI should run" }
+
+# Ruff config — fine defaults out of the box, just pin the target.
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+# A modest, sensible starting set. Add to taste.
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = []
+
+# FastAPI's dependency-injection pattern relies on calling Depends() (and
+# friends) in default-argument position. Tell ruff's bugbear rules that
+# those calls are intentional / immutable, so B008 stops complaining.
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Body",
+    "fastapi.Header",
+    "fastapi.Cookie",
+    "fastapi.Form",
+    "fastapi.File",
+]

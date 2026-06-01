@@ -1,0 +1,42 @@
+# Convenience for `docker compose up` — same Dockerfile, dev-friendly defaults.
+#
+#   docker compose up --build        start the API
+#   docker compose down              stop it
+#   docker compose up --build -d     start in the background
+#
+# This bind-mounts ./app over the image's /app/app, so edits hot-reload
+# without a rebuild. Tests, lint, etc. still run via uv on the host.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: orders
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d orders"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app:/app/app
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    environment:
+      PYTHONUNBUFFERED: "1"
+      DATABASE_URL: "postgresql+psycopg://app:app@postgres:5432/orders"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:

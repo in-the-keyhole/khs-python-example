@@ -6,7 +6,7 @@ kind of test. Run only these with:
 """
 
 from app.models import ItemCreate
-from app.storage import ItemStore
+from app.services.items import ItemStore
 
 
 def test_new_store_is_empty():

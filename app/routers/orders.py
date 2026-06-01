@@ -1,35 +1,28 @@
 """
-Orders router — same shape as items.py, but persisted in Postgres via SQLModel.
+Orders router — the "view" for the orders slice. Thin by design: it parses and
+validates input (via the typed signature), delegates all persistence to
+`app.services.orders`, and shapes the HTTP response (status codes, 404s).
 
-A few things to notice vs. items.py (the in-memory version):
-
-  - The dependency we inject is a `Session` (a unit of work / transaction
-    handle), not a custom store class. Each request gets its own session
-    and it's auto-closed when the handler returns.
-  - We build queries with `select(Order)` (SQLModel's typed query DSL) and
-    execute them via `session.exec(...)`. Think of it as a typed query
-    builder — Prisma's `.findMany({ where })` lives at the same altitude.
-  - `session.add(...)` + `session.commit()` is the equivalent of staging
-    rows in a transaction and committing. `session.refresh(row)` reloads
-    the row so DB-populated fields (id, created_at) come back to the caller.
+Contrast with items.py: there the injected dependency is a stateful singleton
+store; here it's a request-scoped `Session` (a unit of work / transaction
+handle) that the view hands to the stateless service functions. Either way the
+router holds no data-access logic of its own — that lives a layer down in the
+service.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlmodel import Session, select
+from sqlmodel import Session
 
-from app.db import get_session
+from app.clients.db import get_session
 from app.models import Message, Order, OrderCreate, OrderStatus
+from app.services import orders as orders_service
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 
 
 @router.post("", response_model=Order, status_code=status.HTTP_201_CREATED)
 def create_order(payload: OrderCreate, session: Session = Depends(get_session)) -> Order:
-    order = Order.model_validate(payload)
-    session.add(order)
-    session.commit()
-    session.refresh(order)
-    return order
+    return orders_service.create(session, payload)
 
 
 @router.get("", response_model=list[Order])
@@ -38,17 +31,12 @@ def list_orders(
     region: str | None = None,
     session: Session = Depends(get_session),
 ) -> list[Order]:
-    query = select(Order)
-    if status is not None:
-        query = query.where(Order.status == status)
-    if region is not None:
-        query = query.where(Order.region == region)
-    return list(session.exec(query).all())
+    return orders_service.list_orders(session, status=status, region=region)
 
 
 @router.get("/{order_id}", response_model=Order)
 def get_order(order_id: int, session: Session = Depends(get_session)) -> Order:
-    order = session.get(Order, order_id)
+    order = orders_service.get(session, order_id)
     if order is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Order not found")
     return order
@@ -56,9 +44,6 @@ def get_order(order_id: int, session: Session = Depends(get_session)) -> Order:
 
 @router.delete("/{order_id}", response_model=Message)
 def delete_order(order_id: int, session: Session = Depends(get_session)) -> Message:
-    order = session.get(Order, order_id)
-    if order is None:
+    if not orders_service.delete(session, order_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Order not found")
-    session.delete(order)
-    session.commit()
     return Message(message=f"Order {order_id} deleted")

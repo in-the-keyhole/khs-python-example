@@ -24,9 +24,9 @@ from sqlalchemy.exc import OperationalError
 from sqlmodel import Session, SQLModel, create_engine
 from sqlmodel.pool import StaticPool
 
-from app.db import get_session
+from app.clients.db import get_session
 from app.main import app
-from app.storage import ItemStore, get_store
+from app.services.items import ItemStore, get_store
 
 # The throwaway Postgres from compose's `test` profile (see compose.yaml).
 # `poe test:int` brings it up on 5433 before running the integration suite.

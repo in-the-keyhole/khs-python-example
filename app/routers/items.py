@@ -18,7 +18,7 @@ Key things to notice vs. Express:
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.models import Item, ItemCreate, Message
-from app.storage import ItemStore, get_store
+from app.services.items import ItemStore, get_store
 
 router = APIRouter(prefix="/items", tags=["items"])
 

@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.db import create_all
+from app.clients.db import create_all
 from app.routers import demo, items, orders, streaming
 
 

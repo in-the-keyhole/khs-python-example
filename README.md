@@ -219,16 +219,23 @@ serialization, and the auto-generated OpenAPI docs.
 ## 3. Project layout
 
 ```
-app/                 # FastAPI server (Python web-app side)
+app/                 # FastAPI server (Python web-app side) — layered MVC-style
   main.py            # entrypoint — like server.js / app.js
-  models.py          # Pydantic + SQLModel schemas
-  storage.py         # in-memory "DB" for items + a DI provider
-  db.py              # SQLModel engine + session DI provider for orders (see §10)
-  routers/
+  models/            # MODELS: static schemas (no behavior), split by slice
+    items.py         #   ItemCreate, Item
+    orders.py        #   OrderStatus, OrderCreate, Order (SQLModel table)
+    common.py        #   Message (shared response envelope)
+  routers/           # VIEWS: thin endpoints — validate input, call a service, shape the response
     items.py         # a router — like an Express Router
     orders.py        # orders CRUD against Postgres (see §10)
     streaming.py     # streaming responses / SSE
     demo.py          # async vs sync lab
+  services/          # data-access layer the views depend on (see §3.1)
+    items.py         # in-memory "DB" for items — a stateful singleton + DI provider
+    orders.py        # stateless persistence functions for orders (take a Session)
+  controllers/       # business-logic layer — an intentional stub today (see §3.1)
+  clients/           # CLIENTS: connections to external systems (see §3.1)
+    db.py            # SQLModel engine + session DI provider for orders (see §10)
 tests/               # pytest suite (see §6)
 airflow/             # Airflow DAGs — the Python you'll actually write at work (see §8)
   dags/
@@ -248,7 +255,21 @@ uv.lock              # locked dep versions (like package-lock.json) — commit i
 .gitignore
 ```
 
-Read them in this order: `main.py` → `routers/items.py` → `models.py` → `storage.py`.
+Read them in this order: `main.py` → `routers/items.py` → `models.py` → `services/items.py`.
+
+### 3.1 How the layers fit together
+
+The app is organized in an MVC-ish layering, mapped onto FastAPI idioms:
+
+| Layer | Lives in | Role |
+| --- | --- | --- |
+| **Views** | `app/routers/` | Endpoints. Parse/validate input (via the typed signature), call a service, shape the HTTP response (status codes, 404s). No data-access logic. |
+| **Controllers** | `app/controllers/` | Business logic / use cases. An intentional empty stub today — current endpoints are thin CRUD with no business logic to hold yet. |
+| **Services** | `app/services/` | Data access. Two shapes: a *stateful singleton* (`items.ItemStore`, owns in-memory state) and *stateless functions* (`orders`, each take a request-scoped `Session`). |
+| **Models** | `app/models/` | Static data + declarative validation, split by slice (`items`, `orders`, `common`). No methods, no behavior. |
+| **Clients** | `app/clients/` | Connections to external systems (the Postgres engine + `get_session` today; a cache or queue would join it). Services depend on clients; clients hold no business logic. |
+
+The dependency direction is one-way — `views → controllers → services → clients → external systems` — and the wiring between layers is FastAPI's `Depends(...)`, not ad-hoc imports. `orders.py` is the clearest example: the router holds no SQL, it just delegates to `app.services.orders`. (`streaming.py` and `demo.py` keep their trivial generator logic inline — they're teaching examples, not worth a service layer.)
 
 ---
 
@@ -572,7 +593,7 @@ any extra env setup.
 
 | File                                          | Purpose                                                                 |
 | --------------------------------------------- | ----------------------------------------------------------------------- |
-| `app/db.py`                                   | SQLModel sync engine + `get_session` DI provider, reads `DATABASE_URL`. |
+| `app/clients/db.py`                           | SQLModel sync engine + `get_session` DI provider, reads `DATABASE_URL`. |
 | `app/models.py` (extended)                    | Adds the `OrderCreate` input schema and the `Order` SQLModel table.     |
 | `app/routers/orders.py`                       | `/orders` CRUD router — POST, GET (with `?status=&region=`), GET by id, DELETE. |
 | `airflow/dags/postgres_to_bq_orders.py`       | The daily DAG: extract from PG → load to `orders_raw` → aggregate to `sales_daily`. |

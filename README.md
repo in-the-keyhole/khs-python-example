@@ -236,6 +236,9 @@ app/                 # FastAPI server (Python web-app side) — layered MVC-styl
   controllers/       # business-logic layer — an intentional stub today (see §3.1)
   clients/           # CLIENTS: connections to external systems (see §3.1)
     db.py            # SQLModel engine + session DI provider for orders (see §10)
+    datadog.py       # DogStatsD metrics client — sends analytics to Datadog (see §3.2)
+  middleware/        # cross-cutting request wrappers
+    metrics.py       # per-request throughput + latency metrics (see §3.2)
 tests/               # pytest suite (see §6)
 airflow/             # Airflow DAGs — the Python you'll actually write at work (see §8)
   dags/
@@ -255,7 +258,7 @@ uv.lock              # locked dep versions (like package-lock.json) — commit i
 .gitignore
 ```
 
-Read them in this order: `main.py` → `routers/items.py` → `models.py` → `services/items.py`.
+Read them in this order: `main.py` → `routers/items.py` → `models/items.py` → `services/items.py`.
 
 ### 3.1 How the layers fit together
 
@@ -270,6 +273,65 @@ The app is organized in an MVC-ish layering, mapped onto FastAPI idioms:
 | **Clients** | `app/clients/` | Connections to external systems (the Postgres engine + `get_session` today; a cache or queue would join it). Services depend on clients; clients hold no business logic. |
 
 The dependency direction is one-way — `views → controllers → services → clients → external systems` — and the wiring between layers is FastAPI's `Depends(...)`, not ad-hoc imports. `orders.py` is the clearest example: the router holds no SQL, it just delegates to `app.services.orders`. (`streaming.py` and `demo.py` keep their trivial generator logic inline — they're teaching examples, not worth a service layer.)
+
+### 3.2 Sending metrics to Datadog (the clients layer in action)
+
+`app/clients/datadog.py` is a second client alongside `db.py` — it sends custom
+application metrics ("analytics") to Datadog over **DogStatsD**. The flow is the
+same one you'd run in production on GKE or Cloud Run:
+
+```
+  app  --UDP-->  Datadog Agent (DogStatsD :8125)  --HTTPS-->  Datadog
+```
+
+The app never holds a Datadog API key — it fires fire-and-forget UDP packets at
+a local Agent, which batches and forwards them. Sends never block and never
+raise, so instrumentation can't slow down or break a request.
+
+**Safe by default.** Metrics are OFF unless `DD_METRICS_ENABLED` is truthy. With
+it off (local dev, the test suite), every metric call is a no-op and no socket
+is opened — the app runs exactly as if Datadog weren't wired in.
+
+**The demo.** `POST /orders` emits two metrics (see `app/routers/orders.py`):
+
+- `khs.orders.created` — a **counter**, tagged `region:` and `status:`
+- `khs.orders.total_cents` — a **histogram** (Datadog derives avg/p95/max), same tags
+
+The view gets the client via `Depends(get_metrics)` — the same DI seam as the DB
+session and item store. That's also what makes it testable without a network:
+`tests/test_metrics.py` overrides `get_metrics` with a recording fake and asserts
+the endpoint emits the expected metrics.
+
+**App-wide request metrics.** `app/middleware/metrics.py` emits two metrics for
+*every* request (not just orders):
+
+- `khs.http.requests` — a **counter** (throughput)
+- `khs.http.request.duration_ms` — a **histogram** (latency)
+
+both tagged `method:`, `status:`, and `path:` — where `path` is the matched
+*route template* (`/orders/{order_id}`), never the raw path, so tag cardinality
+stays bounded. It's a **pure ASGI middleware** on purpose: Starlette's
+`BaseHTTPMiddleware` buffers the response body, which would break the
+`/stream/*` endpoints and skew timing; the ASGI version only reads the status
+line off `send`, leaving streaming intact (there's a test for exactly that).
+
+**See it end-to-end locally.** Bring up the Agent (compose `observability`
+profile) with your API key, then run the app with metrics on:
+
+```bash
+export DD_API_KEY=...    # app.datadoghq.com → Organization Settings → API Keys
+docker compose --profile observability up -d datadog-agent   # DogStatsD on :8125
+DD_METRICS_ENABLED=true uv run poe dev                       # app emits to the agent
+
+# create a few orders, then look for `khs.orders.created` in Datadog → Metrics Explorer
+curl -X POST http://localhost:8000/orders -H 'Content-Type: application/json' \
+  -d '{"customer_id": 42, "total_cents": 1999, "region": "us-west"}'
+```
+
+Without an Agent (or with `DD_METRICS_ENABLED` unset) everything still works —
+the metrics simply go nowhere. To add more later, inject the client into any
+view and call `increment` / `gauge` / `histogram`; domain-event metrics could
+also move into an `orders` controller as business logic grows.
 
 ---
 

@@ -46,6 +46,31 @@ services:
       timeout: 3s
       retries: 15
 
+  # Datadog Agent for the metrics demo. Behind the `observability` profile so a
+  # plain `docker compose up` never starts it. It receives DogStatsD packets on
+  # 8125/udp and forwards them to your Datadog account — so it needs YOUR API
+  # key. Set it in the shell (or a .gitignored .env) before starting:
+  #
+  #   export DD_API_KEY=...          # from app.datadoghq.com → Organization Settings → API Keys
+  #   docker compose --profile observability up -d datadog-agent
+  #
+  # Then run the app with metrics on (native dev talks to the published 8125):
+  #   DD_METRICS_ENABLED=true uv run poe dev
+  #
+  # DD_API_KEY defaults to empty so this never breaks other compose commands;
+  # without a real key the Agent runs but can't forward (it'll log auth errors).
+  datadog-agent:
+    image: gcr.io/datadoghq/agent:7
+    profiles: ["observability"]
+    environment:
+      DD_API_KEY: "${DD_API_KEY:-}"
+      DD_SITE: "${DD_SITE:-datadoghq.com}"
+      # Accept DogStatsD from outside the container (the host app / the api service).
+      DD_DOGSTATSD_NON_LOCAL_TRAFFIC: "true"
+      DD_APM_ENABLED: "false"
+    ports:
+      - "8125:8125/udp"   # DogStatsD intake
+
   api:
     build: .
     ports:
@@ -56,6 +81,11 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
       DATABASE_URL: "postgresql+psycopg://app:app@postgres:5432/orders"
+      # Metrics off by default; the agent host is pre-wired for when you turn it
+      # on (run the api + datadog-agent together under the observability profile
+      # with DD_METRICS_ENABLED=true).
+      DD_METRICS_ENABLED: "${DD_METRICS_ENABLED:-}"
+      DD_AGENT_HOST: "datadog-agent"
     depends_on:
       postgres:
         condition: service_healthy

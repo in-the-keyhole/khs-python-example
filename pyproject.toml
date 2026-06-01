@@ -9,6 +9,7 @@ dependencies = [
     "pydantic>=2.9",
     "sqlmodel>=0.0.38",
     "psycopg[binary]>=3.3.4",
+    "datadog>=0.52.1",
 ]
 
 # Cross-platform lockfile. uv will pick versions that have wheels for every

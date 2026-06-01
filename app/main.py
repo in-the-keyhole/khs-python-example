@@ -12,7 +12,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.clients.datadog import metrics
 from app.clients.db import create_all
+from app.middleware.metrics import RequestMetricsMiddleware
 from app.routers import demo, items, orders, streaming
 
 
@@ -33,6 +35,11 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# Emit per-request throughput + latency metrics to Datadog (no-ops unless
+# DD_METRICS_ENABLED). Pass the process-wide metrics client explicitly so it's
+# easy to swap for a fake in tests.
+app.add_middleware(RequestMetricsMiddleware, metrics=metrics)
 
 
 @app.get("/")

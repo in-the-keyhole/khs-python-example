@@ -8,11 +8,17 @@ store; here it's a request-scoped `Session` (a unit of work / transaction
 handle) that the view hands to the stateless service functions. Either way the
 router holds no data-access logic of its own — that lives a layer down in the
 service.
+
+It also emits a couple of Datadog metrics on order creation — a small, honest
+demo of "send analytics to Datadog" at the HTTP boundary. (Domain-event metrics
+like these could move into an `orders` controller once business logic lands
+there; for now the view is the simplest place to show the client + DI seam.)
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session
 
+from app.clients.datadog import MetricsClient, get_metrics
 from app.clients.db import get_session
 from app.models import Message, Order, OrderCreate, OrderStatus
 from app.services import orders as orders_service
@@ -21,8 +27,17 @@ router = APIRouter(prefix="/orders", tags=["orders"])
 
 
 @router.post("", response_model=Order, status_code=status.HTTP_201_CREATED)
-def create_order(payload: OrderCreate, session: Session = Depends(get_session)) -> Order:
-    return orders_service.create(session, payload)
+def create_order(
+    payload: OrderCreate,
+    session: Session = Depends(get_session),
+    metrics: MetricsClient = Depends(get_metrics),
+) -> Order:
+    order = orders_service.create(session, payload)
+    # Analytics: count orders and track their size, sliced by region/status.
+    tags = [f"region:{order.region}", f"status:{order.status}"]
+    metrics.increment("orders.created", tags=tags)
+    metrics.histogram("orders.total_cents", order.total_cents, tags=tags)
+    return order
 
 
 @router.get("", response_model=list[Order])

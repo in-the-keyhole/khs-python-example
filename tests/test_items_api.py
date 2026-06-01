@@ -12,6 +12,12 @@ handles it internally.
 """
 
 
+def test_root(client):
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "message" in response.json()
+
+
 def test_health(client):
     response = client.get("/health")
     assert response.status_code == 200
@@ -52,6 +58,12 @@ def test_delete_then_404(client):
     created = client.post("/items", json={"name": "x", "price": 1.0}).json()
     assert client.delete(f"/items/{created['id']}").status_code == 200
     assert client.get(f"/items/{created['id']}").status_code == 404
+
+
+def test_delete_missing_returns_404(client):
+    response = client.delete("/items/999")
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Item not found"}
 
 
 def test_per_test_isolation(client):

@@ -19,7 +19,10 @@ from collections.abc import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlmodel import Session, SQLModel, create_engine
+from sqlmodel.pool import StaticPool
 
+from app.db import get_session
 from app.main import app
 from app.storage import ItemStore, get_store
 
@@ -38,6 +41,43 @@ def client(store: ItemStore) -> Iterator[TestClient]:
     you'd use to swap a real database for a fake one in tests.
     """
     app.dependency_overrides[get_store] = lambda: store
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def session() -> Iterator[Session]:
+    """
+    An isolated in-memory SQLite database per test — the orders router's
+    `get_session` dependency gets pointed at this instead of Postgres, so the
+    suite needs no running database.
+
+    StaticPool keeps a single shared connection alive for the lifetime of the
+    fixture (in-memory SQLite is per-connection, so without this the schema
+    would vanish between requests). A brand-new engine per test guarantees no
+    state leaks across tests.
+    """
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    SQLModel.metadata.create_all(engine)
+    with Session(engine) as s:
+        yield s
+    engine.dispose()  # close the pooled connection so no ResourceWarning leaks
+
+
+@pytest.fixture
+def orders_client(session: Session) -> Iterator[TestClient]:
+    """
+    A TestClient with the DB `get_session` dependency overridden to use the
+    per-test SQLite `session` above — the same seam as `client`, one layer
+    down at the database instead of the in-memory store.
+    """
+    app.dependency_overrides[get_session] = lambda: session
     try:
         yield TestClient(app)
     finally:
